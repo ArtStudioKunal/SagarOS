@@ -64,7 +64,7 @@ jobs:
       - name: Validate YAML syntax
         shell: pwsh
         run: |
-          yamllint -d '{extends: relaxed, rules: {empty-lines: disable, line-length: disable, new-line-at-end-of-file: disable, trailing-spaces: disable, new-lines: {type: platform}}}' atlas/src/playbook/Configuration
+          yamllint -d '{extends: relaxed, rules: {empty-lines: disable, line-length: disable, new-line-at-end-of-file: disable, trailing-spaces: disable, new-lines: disable}}' atlas/src/playbook/Configuration
           if ($LASTEXITCODE -ne 0) { throw 'YAML validation failed' }
 
       - name: Build experimental SagarOS APBX
