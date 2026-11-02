@@ -77,6 +77,8 @@ def remove_upstream_toolbox(source: pathlib.Path) -> None:
     require(block_start >= 0 and block_end > block_start,
             "Cannot identify exact upstream Toolbox downloader boundaries")
     data = data[:block_start] + data[block_end:]
+    # The removed Toolbox parameter was last in the param list; drop preceding comma.
+    data = data.replace("[switch]$Firefox,\n)", "[switch]$Firefox\n)")
     put(software, data)
     for path in (pb / "Executables/AtlasModules/Toolbox",
                  pb / "Executables/AtlasModules/Scripts/installToolbox.ps1"):
