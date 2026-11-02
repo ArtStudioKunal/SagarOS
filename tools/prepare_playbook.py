@@ -69,8 +69,14 @@ def remove_upstream_toolbox(source: pathlib.Path) -> None:
     data = read(software)
     data, count = re.subn(r'^\s*\[switch\]\$Toolbox,?\s*\n', "", data, count=1, flags=re.M)
     require(count == 1, "Cannot remove upstream Toolbox software argument")
-    data, count = re.subn(r'(?s)\n# Toolbox\s*\nif \(\$Toolbox\) \{.*?\n\}\n(?=\n# Brave)', "\n", data, count=1)
-    require(count == 1, "Cannot remove upstream Toolbox downloader")
+    # Remove only the bounded Toolbox block; tolerate extra blank lines in upstream.
+    marker = "\n# Toolbox\nif ($Toolbox) {"
+    following = "\n# Brave\n"
+    block_start = data.find(marker)
+    block_end = data.find(following, block_start + len(marker))
+    require(block_start >= 0 and block_end > block_start,
+            "Cannot identify exact upstream Toolbox downloader boundaries")
+    data = data[:block_start] + data[block_end:]
     put(software, data)
     for path in (pb / "Executables/AtlasModules/Toolbox",
                  pb / "Executables/AtlasModules/Scripts/installToolbox.ps1"):
