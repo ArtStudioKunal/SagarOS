@@ -1,0 +1,109 @@
+name: SagarOS - Build experimental Windows playbook
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out SagarOS overlay source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install static and artwork dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check 'Pillow==11.3.0' 'yamllint==1.35.1'
+          if ($LASTEXITCODE -ne 0) { throw 'Python dependencies failed' }
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
+            choco install 7zip -y --no-progress
+          }
+          if (-not (Test-Path 'C:\Program Files\7-Zip\7z.exe')) {
+            if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) { throw '7-Zip is missing' }
+          }
+
+      - name: Retrieve precisely pinned upstream AtlasOS source
+        shell: pwsh
+        run: |
+          git init atlas
+          git -C atlas remote add origin https://github.com/Atlas-OS/Atlas.git
+          git -C atlas fetch --depth 1 origin 6cbd1a3401ae3bc73a1ad1b6eba324a7813fa48c
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch pinned upstream' }
+          git -C atlas checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check out pinned upstream' }
+          $actual = (git -C atlas rev-parse HEAD).Trim()
+          if ($actual -ne '6cbd1a3401ae3bc73a1ad1b6eba324a7813fa48c') {
+            throw 'Upstream commit mismatch'
+          }
+
+      - name: Transform into SagarOS source
+        shell: pwsh
+        run: |
+          python -m py_compile tools/prepare_playbook.py
+          python tools/prepare_playbook.py --source atlas --overlay .
+          if ($LASTEXITCODE -ne 0) { throw 'SagarOS source patch failed' }
+
+      - name: Validate YAML syntax
+        shell: pwsh
+        run: |
+          yamllint -d '{extends: relaxed, rules: {empty-lines: disable, line-length: disable, new-line-at-end-of-file: disable, trailing-spaces: disable, new-lines: {type: platform}}}' atlas/src/playbook/Configuration
+          if ($LASTEXITCODE -ne 0) { throw 'YAML validation failed' }
+
+      - name: Build experimental SagarOS APBX
+        shell: pwsh
+        working-directory: atlas/src/playbook
+        run: |
+          & ../dependencies/local-build.ps1 -ReplaceOldPlaybook -Removals Verification -DontOpenPbLocation -FileName 'SagarOS'
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path 'SagarOS.apbx')) {
+            throw 'SagarOS APBX was not built'
+          }
+
+      - name: Validate packaged manifest and recovery scripts
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'sagaros-audit'
+          New-Item -ItemType Directory -Path $target -Force | Out-Null
+          & 'C:\Program Files\7-Zip\7z.exe' x '-pmalte' '-y' "-o$target" 'atlas/src/playbook/SagarOS.apbx' | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'APBX could not be unpacked' }
+          $manifest = Join-Path $target 'playbook.conf'
+          if (-not (Test-Path $manifest)) { throw 'APBX has no playbook.conf' }
+          [xml]$config = Get-Content -LiteralPath $manifest -Raw
+          if ($config.Playbook.Name -ne 'SagarOS') { throw 'Wrong product name in APBX' }
+          if (@($config.Playbook.SupportedBuilds.string).Count -lt 1) { throw 'Windows build gates missing' }
+          foreach ($name in @('SagarOS-Finalize.ps1','SagarOS-Enable-Internet.ps1','SagarOS-Verify.ps1')) {
+            if (-not (Test-Path (Join-Path $target "Executables/$name"))) {
+              throw "Missing required post-install script: $name"
+            }
+          }
+          if (Select-String -LiteralPath (Join-Path $target 'Executables/SOFTWARE.ps1') -Pattern 'atlas-toolbox/releases/latest/download' -Quiet) {
+            throw 'Upstream Toolbox downloader still bundled'
+          }
+          $hash = (Get-FileHash 'atlas/src/playbook/SagarOS.apbx' -Algorithm SHA256).Hash
+          Write-Host "SagarOS experimental APBX SHA256: $hash"
+          Write-Host 'Static package checks only: Windows installation and internet behavior NOT validated.'
+
+      - name: Upload untested development playbook
+        uses: actions/upload-artifact@v4
+        with:
+          name: SagarOS-APBX-DEV-UNTESTED
+          path: atlas/src/playbook/SagarOS.apbx
+          retention-days: 14
+          if-no-files-found: error
